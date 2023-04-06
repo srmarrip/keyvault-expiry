@@ -1,0 +1,48 @@
+# Connect to Azure and authenticate
+Connect-AzAccount
+
+# Set the number of days before secrets expire
+$daysUntilExpiration = 90
+
+# Set the number of days before sending a notification email
+$daysUntilNotification = 20
+
+# Set the email address to send the notification to
+$notificationEmail = "YourNotificationEmail@YourDomain.com"
+
+# Get all the key vaults in the subscription
+$keyVaults = Get-AzKeyVault
+
+# Loop through each key vault
+foreach ($keyVault in $keyVaults) {
+
+    Write-Output "Setting expiry dates for secrets in $($keyVault.VaultName)"
+
+    # Get all secrets from the key vault
+    $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName
+
+    # Loop through each secret and check if it has an expiry date set
+    foreach ($secret in $secrets) {
+        $expires = $secret.Attributes.Expires
+        if ($expires -eq $null) {
+            # The secret does not have an expiry date set, so set one
+            $expires = (Get-Date).AddDays($daysUntilExpiration)
+            Set-AzKeyVaultSecret -VaultName $keyVault.VaultName -Name $secret.Name -Expires $expires
+            Write-Output "Expiry date has been set for $($secret.Name)."
+        } else {
+            # The secret has an expiry date set, so check if it is within the notification window
+            $daysUntilExpires = ($expires - (Get-Date)).Days
+            if ($daysUntilExpires -le $daysUntilNotification) {
+                # The secret is within the notification window, so send a notification email
+                $emailSubject = "Key Vault Secret Expiring Soon: $($secret.Name)"
+                $emailBody = "The following secret in $($keyVault.VaultName) is set to expire in $daysUntilExpires days:`r`n`r`n"
+                $emailBody += "Name: $($secret.Name)`r`n"
+                $emailBody += "Expires: $($expires.ToShortDateString())"
+                Send-MailMessage -To $notificationEmail -Subject $emailSubject -Body $emailBody -SmtpServer "YourSmtpServer"
+                Write-Output "Notification email sent for $($secret.Name)."
+            }
+        }
+    }
+}
+
+Write-Output "All key vaults in the subscription have been checked for secrets without an expiry date and updated accordingly, and notifications sent if necessary."
