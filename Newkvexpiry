@@ -1,0 +1,34 @@
+# Connect to Azure and authenticate
+Connect-AzAccount
+
+# Get all the Key Vaults in the subscription
+$keyVaults = Get-AzKeyVault
+
+# Loop through each Key Vault and get its tags
+foreach ($keyVault in $keyVaults) {
+    $tags = $keyVault.Tags
+
+    # Loop through each tag and create an Action Rule for each matching Action Group
+    foreach ($tagName in $tags.Keys) {
+        $tagValue = $tags[$tagName]
+        $actionGroup = Get-AzActionGroup | Where-Object { $_.Name -eq $tagValue }
+        if ($actionGroup -ne $null) {
+            $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName
+            foreach ($secret in $secrets) {
+                $expires = $secret.Attributes.Expires
+                if ($expires -ne $null -and ($expires - (Get-Date)).Days -le 20) {
+                    New-AzActionRule -Name "MyActionRule-$($keyVault.VaultName)-$($secret.Name)" `
+                                     -ResourceGroup $keyVault.ResourceGroupName `
+                                     -Location $keyVault.Location `
+                                     -TargetResourceId $secret.Id `
+                                     -ActionGroupId $actionGroup.Id `
+                                     -ConditionType "Metric" `
+                                     -MetricName "SecretExpiration" `
+                                     -Operator "GreaterThan" `
+                                     -Threshold 0 `
+                                     -WindowSize "PT1M"
+                }
+            }
+        }
+    }
+}
