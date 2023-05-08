@@ -1,0 +1,60 @@
+# Connect to Azure using the Azure Automation account identity
+Connect-AzAccount -Identity
+
+# Get all the key vaults on the subscription
+$keyVaults = Get-AzKeyVault
+
+# Loop through each key vault
+foreach ($keyVault in $keyVaults) {
+
+    # Get the tags and tag values of the key vault
+    $tags = Get-AzResource -ResourceId $keyVault.ResourceId -ExpandProperties | Select-Object -ExpandProperty Tags
+
+    # Loop through each tag of the key vault
+    foreach ($tag in $tags.Keys) {
+
+        # Check if there is an action group with the same name as the tag value
+        $actionGroups = Get-AzActionGroup | Where-Object { $_.Tags[$tag] -eq $tags[$tag] }
+
+        if ($actionGroups) {
+            Write-Host "Action group(s) found with tag value $($tags[$tag]) for key vault $($keyVault.Name)" -ForegroundColor Green
+
+            # Get all the secrets in the key vault
+            $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.Name
+
+            # Loop through each secret in the key vault
+            foreach ($secret in $secrets) {
+
+                # Get the secret properties
+                $secretProps = Get-AzKeyVaultSecret -VaultName $keyVault.Name -Name $secret.Name
+
+                # Check if the secret expires within the next 20 days
+                $expireDate = $secretProps.Expires
+                $daysToExpire = ($expireDate - (Get-Date)).Days
+
+                if ($daysToExpire -le 20) {
+
+                    # Send email notification using the action group
+                    $emailBody = "The secret $($secret.Name) in key vault $($keyVault.Name) is going to expire in $($daysToExpire) days."
+                    $emailSubject = "Key Vault Secret Expiry Notification"
+                    $notification = New-AzActionGroupEmail -Body $emailBody -Subject $emailSubject
+                    New-AzActionGroupAction -ActionGroup $actionGroups[0].Name -Action $notification -Name "Email Notification $($secret.Name)"
+
+                    # Set expiry to the secret if it does not have one
+                    if (-not $secretProps.Attributes.Expires) {
+                        Set-AzKeyVaultSecret -VaultName $keyVault.Name -Name $secret.Name -Expires (Get-Date).AddDays(90)
+                        Write-Host "Expiry set to $($secret.Name) in key vault $($keyVault.Name)" -ForegroundColor Green
+
+                        # Send email notification using the action group
+                        $emailBody = "The secret $($secret.Name) in key vault $($keyVault.Name) has been set to expire in 90 days."
+                        $emailSubject = "Key Vault Secret Expiry Notification"
+                        $notification = New-AzActionGroupEmail -Body $emailBody -Subject $emailSubject
+                        New-AzActionGroupAction -ActionGroup $actionGroups[0].Name -Action $notification -Name "Email Notification $($secret.Name) - Expiry Set"
+                    }
+                }
+            }
+        } else {
+            Write-Host "No action group(s) found with tag value $($tags[$tag]) for key vault $($keyVault.Name)" -ForegroundColor Yellow
+        }
+    }
+}
