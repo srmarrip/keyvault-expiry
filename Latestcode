@@ -1,0 +1,64 @@
+# Connect to Azure and authenticate
+Connect-AzAccount
+
+# Get all the Key Vaults in the subscription
+$keyVaults = Get-AzKeyVault
+
+# Loop through each Key Vault and get its tags
+foreach ($keyVault in $keyVaults) {
+    $tags = $keyVault.Tags
+
+    # Loop through each tag and create an Action Rule for each matching Action Group
+    foreach ($tagName in $tags.Keys) {
+        $tagValue = $tags[$tagName]
+        $actionGroup = Get-AzActionGroup | Where-Object { $_.Name -eq $tagValue }
+        if ($actionGroup -ne $null) {
+            $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.VaultName
+            foreach ($secret in $secrets) {
+                $expires = $secret.Attributes.Expires
+                if ($expires -ne $null) {
+                    $daysToExpiry = ($expires - (Get-Date)).Days
+                    if ($daysToExpiry -le 20) {
+                        # Secret is about to expire in the next 20 days
+                        $notificationBody = "The secret $($secret.Name) in Key Vault $($keyVault.VaultName) is set to expire on $($expires.ToString())."
+                        $notificationTitle = "Key Vault Secret Expiry Alert: $($secret.Name) expiring in $($daysToExpiry) days in $($keyVault.VaultName)"
+                        $actionRuleName = "MyActionRule-$($keyVault.VaultName)-$($secret.Name)"
+
+                        # Check if an Action Rule already exists for this secret and action group
+                        $existingRule = Get-AzActionRule -Name $actionRuleName -ResourceGroup $keyVault.ResourceGroupName -ErrorAction SilentlyContinue
+                        if ($existingRule -eq $null) {
+                            # Action Rule does not exist, so create a new one
+                            New-AzActionRule -Name $actionRuleName `
+                                             -ResourceGroup $keyVault.ResourceGroupName `
+                                             -Location $keyVault.Location `
+                                             -TargetResourceId $secret.Id `
+                                             -ActionGroupId $actionGroup.Id `
+                                             -ConditionType "Metric" `
+                                             -MetricName "SecretExpiration" `
+                                             -Operator "GreaterThan" `
+                                             -Threshold 0 `
+                                             -WindowSize "PT1M"
+                        }
+
+                        # Send a notification to the Action Group
+                        $notification = New-AzAlertRuleEmail -CustomEmails $actionGroup.EmailReceiver `
+                                                             -Name $notificationTitle `
+                                                             -Description $notificationBody `
+                                                             -Severity 2
+                        $notification | New-AzAlertRule -ResourceGroup $keyVault.ResourceGroupName `
+                                                        -TargetResourceId $secret.Id `
+                                                        -ActionRule $existingRule
+
+                        # Remove the action rule after the successful notification has been sent
+                        if ($existingRule -ne $null) {
+                            $existingRule | Remove-AzActionRule -Force
+                        }
+                    }
+                } else {
+                    # Secret does not have an expiry date set, so set it to 90 days from today
+                    $newExpiry = (Get-Date).AddDays(90)
+                    $secret | Set-AzKeyVaultSecret -Expires $newExpiry
+
+                    # Send a notification to the Action Group
+                    $notificationBody = "The expiry for secret $($secret.Name) in Key Vault $($keyVault.VaultName) has been set to $($newExpiry.ToString())."
+                    $notificationTitle = "Key Vault Secret Expiry Alert: $($secret.Name) expiry set to $($newExpiry
