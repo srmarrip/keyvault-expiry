@@ -1,0 +1,58 @@
+# Get the Automation account
+$automationAccount = Get-AzAutomationAccount -Name "<AutomationAccountName>" -ResourceGroupName "<ResourceGroupName>"
+
+# Authenticate with the Automation account identity
+Connect-AzAccount -Identity -AccountId $automationAccount.Id
+
+# Get all key vaults in the subscription
+$keyVaults = Get-AzKeyVault
+
+foreach ($keyVault in $keyVaults) {
+    # Get the tags of the key vault
+    $tags = Get-AzResource -ResourceId $keyVault.ResourceId -ExpandProperties | Select-Object -ExpandProperty Tags
+
+    # Check if the key vault has a matching action group tag
+    if ($tags -and $tags.ContainsKey("ActionGroup")) {
+        # Get the name of the matching action group
+        $actionGroupName = $tags["ActionGroup"]
+
+        # Get the action group
+        $actionGroup = Get-AzActionGroup -Name $actionGroupName
+
+        # Get the secrets in the key vault
+        $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.Name
+
+        # Loop through the secrets
+        foreach ($secret in $secrets) {
+            # Check if the secret has an expiration date
+            if (-not $secret.Attributes.Expires) {
+                # Set expiration date to 90 days from now
+                $expires = Get-Date.AddDays(90)
+                Set-AzKeyVaultSecret -VaultName $keyVault.Name -Name $secret.Name -Expires $expires
+            }
+            # Check if the secret will expire in 20 days or less
+            elseif (($secret.Attributes.Expires - (Get-Date)).Days -le 20) {
+                # Create the action rule
+                $actionRule = New-AzActionRule -Name "SecretExpiringSoon-$($keyVault.Name)-$($secret.Name)" `
+                    -ActionGroupId $actionGroup.Id `
+                    -Severity 2 `
+                    -Trigger `
+                        @{
+                            ExpiryDate = $secret.Attributes.Expires
+                            ExpiresIn = "PT0H0M0S", 
+                            ImpactedScope = $secret.Id
+                        } `
+                    -Description "The secret $($secret.Name) in the key vault $($keyVault.Name) is expiring soon."
+
+                # Send the notification
+                Send-AzActionGroup -Name $actionGroupName -Action $actionRule
+
+                # Remove the action rule
+                Remove-AzActionRule -ActionRule $actionRule
+            }
+        }
+    }
+    else {
+        Write-Output "No matching action groups found for $($keyVault.Name)."
+    }
+}
