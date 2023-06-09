@@ -1,0 +1,60 @@
+# Import the required modules
+Import-Module Az.Accounts
+Import-Module Az.KeyVault
+
+# Authenticate to Azure
+Connect-AzAccount
+
+# Create an array to store the output data
+$output = @()
+
+# Fetch all the key vaults
+$keyVaults = Get-AzKeyVault
+
+# Iterate through each key vault
+foreach ($keyVault in $keyVaults) {
+    # Get the tags for the key vault
+    $tags = Get-AzResource -ResourceId $keyVault.Id | Select-Object -ExpandProperty Tags
+
+    # Check if there is any action group matching the key vault's tag value
+    $actionGroup = Get-AzActionGroup | Where-Object { $_.Tags.Values -contains $tags }
+
+    if ($actionGroup) {
+        # Create an object to store the output data
+        $outputObject = [PSCustomObject] @{
+            ActionGroupName = $actionGroup.Name
+            KeyVaultName = $keyVault.Name
+            Secrets = @()
+        }
+
+        # Fetch all the secrets of the matching key vault
+        $secrets = Get-AzKeyVaultSecret -VaultName $keyVault.Name
+
+        foreach ($secret in $secrets) {
+            # Check if the secret has an expiry date
+            if (-not $secret.Properties.Expires) {
+                # Set a default expiry of 90 days from the current date
+                $expiryDate = (Get-Date).AddDays(90)
+                Set-AzKeyVaultSecret -VaultName $keyVault.Name -Name $secret.Name -Expires $expiryDate
+            } else {
+                # Check if the secret is going to expire in 20 days
+                $expiryThreshold = (Get-Date).AddDays(20)
+
+                if ($secret.Properties.Expires -lt $expiryThreshold) {
+                    # Send email notification using the action group
+                    $emailMessage = "The secret $($secret.Name) in key vault $($keyVault.Name) is going to expire on $($secret.Properties.Expires)."
+                    Send-AzActionGroupEmail -ActionGroupId $actionGroup.Id -Subject "Secret Expiry Notification" -Message $emailMessage
+
+                    # Add the secret name to the output object
+                    $outputObject.Secrets += $secret.Name
+                }
+            }
+        }
+
+        # Add the output object to the output array
+        $output += $outputObject
+    }
+}
+
+# Output the collected data
+$output | Format-Table -AutoSize
