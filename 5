@@ -1,0 +1,32 @@
+# Fetch all the Key Vaults in the Azure subscription
+$keyVaults = Get-AzKeyVault
+
+# Loop through each Key Vault
+foreach ($keyVault in $keyVaults) {
+    $keyVaultDetails = Get-AzKeyVault -VaultName $keyVault.VaultName -ResourceGroupName $keyVault.ResourceGroupName
+    $tags = $keyVaultDetails.Tags
+
+    # Output the Key Vault details and tags
+    Write-Output "Key Vault Name: $($keyVault.VaultName)"
+    Write-Output "Key Vault Resource Group: $($keyVault.ResourceGroupName)"
+    Write-Output "Key Vault Location: $($keyVault.Location)"
+    Write-Output "Tags:"
+    foreach ($tag in $tags.GetEnumerator()) {
+        Write-Output "- $($tag.Name): $($tag.Value)"
+    }
+    
+    # Check for matching action group name with tags
+    $actionGroupName = $tags['ActionGroupName']
+    if (![string]::IsNullOrEmpty($actionGroupName)) {
+        $matchingActionGroup = Get-AzActionGroup -Name $actionGroupName
+        if ($matchingActionGroup) {
+            Write-Output "Matching Action Group found: $($matchingActionGroup.Name)"
+        } else {
+            Write-Output "No matching Action Group found for the specified tag."
+        }
+    } else {
+        Write-Output "ActionGroupName tag is missing for this Key Vault."
+    }
+    
+    Write-Output "---------------------------------------------"
+}
