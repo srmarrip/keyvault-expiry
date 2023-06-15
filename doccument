@@ -1,0 +1,48 @@
+Overview
+Azure Key Vault Secret Expiry is a critical aspect of managing secrets securely within Azure Key Vaults. Ensuring that secrets have proper expiry dates helps maintain security and compliance standards. The process of handling Key Vault secret expiry involves regular monitoring, setting default expiry for secrets without a specified date, and notifying relevant stakeholders when secrets are about to expire.
+
+This documentation provides an overview of how the Azure Key Vault Secret Expiry Management script facilitates the process of managing secret expiry in Azure Key Vaults. It includes instructions for using the script and details its functionality.
+
+Script Functionality
+The Azure Key Vault Secret Expiry Management script automates the management of secret expiry in Azure Key Vaults. It performs the following actions:
+
+Lists all Key Vaults in the Azure subscription.
+Retrieves the tags of each Key Vault and checks if there are any matching action groups based on the tags.
+For Key Vaults with matching action groups, it performs the following actions:
+Retrieves the list of secrets from the Key Vault.
+Checks if a secret has an expiry date set.
+Sets a default expiry of 90 days for secrets without an expiry date.
+Sends email notifications to the relevant action groups for secrets without an expiry date and for secrets about to expire within 20 days.
+Prerequisites
+Before using the script, ensure you have the following prerequisites in place:
+
+Azure Subscription: You must have an active Azure subscription to run this script.
+PowerShell: Ensure that you have PowerShell installed on your machine.
+Azure PowerShell Module: Install the Azure PowerShell module by running the following command in PowerShell:
+powershell
+Copy code
+Install-Module -Name Az -AllowClobber -Force
+Usage
+Follow the steps below to use the Azure Key Vault Secret Expiry Management script:
+
+Open PowerShell or PowerShell ISE.
+Connect to Azure using Managed Service Identity (MSI) by running the following command:
+powershell
+Copy code
+Connect-AzAccount -Identity
+This command will authenticate using the MSI associated with your Azure subscription.
+
+Copy and paste the script into your PowerShell session.
+
+Modify the script if needed:
+
+Exclude Key Vaults: If there are specific Key Vaults that need to be excluded from the script's actions, modify the $excludedKeyVaults array by adding or removing the names of the Key Vaults.
+powershell
+Copy code
+$excludedKeyVaults = @("KeyVault1", "KeyVault2")
+Customize Email Messages: Customize the email subject and body messages in the Send-AzActionGroupEmail cmdlet to align with your desired notification format.
+Run the script by executing it in your PowerShell session.
+Conclusion
+Managing secret expiry is crucial for maintaining the security and compliance of Azure Key Vaults. The Azure Key Vault Secret Expiry Management script simplifies this process by automating the identification of secrets without an expiry date, setting default expiry values, and notifying relevant stakeholders about secrets approaching their expiry.
+
+By using this script, you can ensure timely management of secret expiry, reduce security risks, and maintain a robust security posture for your Azure Key Vaults.
