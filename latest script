@@ -1,94 +1,62 @@
 # Connect to Azure using Managed Service Identity (MSI)
 Connect-AzAccount -Identity
 
-# Get a list of all Key Vaults
+# Get all Key Vaults in the Azure subscription
 $keyVaults = Get-AzKeyVault
 
+# Define excluded Key Vaults (if any)
+$excludedKeyVaults = @("KeyVault1", "KeyVault2")
+
 # Loop through each Key Vault
-foreach ($keyVault in $keyVaults)
-{
-    $vaultName = $keyVault.VaultName
-    $resourceGroupName = $keyVault.ResourceGroupName
+foreach ($keyVault in $keyVaults) {
+    $keyVaultName = $keyVault.VaultName
 
-    # Output Key Vault details
-    Write-Output "Key Vault: $vaultName"
-    Write-Output "-------------------"
+    # Check if Key Vault is excluded
+    if ($excludedKeyVaults -contains $keyVaultName) {
+        Write-Host "Skipping Key Vault '$keyVaultName' as it is excluded."
+        continue
+    }
 
-    # Get tags of the Key Vault
-    $keyVaultTags = Get-AzResource -ResourceId $keyVault.ResourceId | Select-Object -ExpandProperty Tags
+    Write-Host "Processing Key Vault '$keyVaultName'..."
 
-    # Check if any action group matches the Key Vault's tags
-    $actionGroups = Get-AzActionGroup
-    $matchingActionGroups = $actionGroups | Where-Object { $_.Tags.Keys -eq $keyVaultTags.Keys }
+    # Retrieve tags and action groups for the Key Vault
+    $keyVaultTags = $keyVault.Tags
+    $matchingActionGroups = Get-AzActionGroup | Where-Object {
+        $keyVaultTags.GetEnumerator() -contains $_.Tags.GetEnumerator()
+    }
 
-    if ($matchingActionGroups)
-    {
-        # Get the list of secrets from the Key Vault
-        $secrets = Get-AzKeyVaultSecret -VaultName $vaultName -ResourceGroupName $resourceGroupName
+    # Check if there are matching action groups
+    if ($matchingActionGroups) {
+        # Retrieve the list of secrets from the Key Vault
+        $secrets = Get-AzKeyVaultSecret -VaultName $keyVaultName
 
-        # Loop through each secret
-        foreach ($secret in $secrets)
-        {
+        # Check for secrets without expiry and set default expiry of 90 days
+        $secretsWithoutExpiry = $secrets | Where-Object { -not $_.Properties.Expires }
+        foreach ($secret in $secretsWithoutExpiry) {
             $secretName = $secret.Name
-            $secretValue = $secret.SecretValueText
-            $expiryDate = $secret.Attributes.Expires
+            $expiryDate = (Get-Date).AddDays(90)
 
-            # Check if the secret has an expiry date set
-            if ($expiryDate)
-            {
-                # Check if the expiry date is within 20 days
-                $expiryThreshold = (Get-Date).AddDays(20)
-                if ($expiryDate -lt $expiryThreshold)
-                {
-                    # Output secrets about to expire in 20 days
-                    Write-Output "Secret Name: $secretName"
-                    Write-Output "Expiry Date: $expiryDate"
-                    Write-Output "Secret Value: $secretValue"
-                    Write-Output "-------------------"
+            Write-Host "Setting default expiry of 90 days for secret '$secretName'..."
 
-                    # Send email notification for secrets about to expire
-                    foreach ($matchingActionGroup in $matchingActionGroups)
-                    {
-                        $actionGroupId = $matchingActionGroup.ResourceId
+            # Set default expiry for the secret
+            Set-AzKeyVaultSecret -VaultName $keyVaultName -Name $secretName -Expires $expiryDate
 
-                        $emailSubject = "Secret Expiry Alert - $secretName"
-                        $emailBody = "The secret '$secretName' in Key Vault '$vaultName' is about to expire in 20 days."
-                        $emailRecipients = $matchingActionGroup.EmailReceivers
-
-                        Send-AzActionGroupEmail -ActionGroupId $actionGroupId `
-                            -Subject $emailSubject `
-                            -Body $emailBody `
-                            -Recipients $emailRecipients
-                    }
-                }
+            # Notify the matching action groups
+            foreach ($actionGroup in $matchingActionGroups) {
+                Send-AzActionGroupEmail -ActionGroupId $actionGroup.ActionGroupId -Subject "Secret Expiry Set for '$secretName'" -Body "The secret '$secretName' in Key Vault '$keyVaultName' has been set with a default expiry date of $expiryDate."
             }
-            else
-            {
-                # Output secrets without an expiry date (default expiry value: 90 days)
-                Write-Output "Secret Name: $secretName"
-                Write-Output "Expiry Date: Default (90 days)"
-                Write-Output "Secret Value: $secretValue"
-                Write-Output "-------------------"
+        }
 
-                # Set default expiry for secrets without an expiry date
-                $defaultExpiry = (Get-Date).AddDays(90)
-                Set-AzKeyVaultSecret -VaultName $vaultName -Name $secretName -Expires $defaultExpiry
+        # Check for secrets about to expire in 20 days
+        $secretsAboutToExpire = $secrets | Where-Object { $_.Properties.Expires -lt (Get-Date).AddDays(20) }
+        foreach ($secret in $secretsAboutToExpire) {
+            $secretName = $secret.Name
 
-                # Send email notification for setting expiry date
-                foreach ($matchingActionGroup in $matchingActionGroups)
-                {
-                    $actionGroupId = $matchingActionGroup.ResourceId
-
-                    $emailSubject = "Secret Expiry Set - $secretName"
-                    $emailBody = "The secret '$secretName' in Key Vault '$vaultName' has been set with a default expiry date of $defaultExpiry."
-                    $emailRecipients = $matchingActionGroup.EmailReceivers
-
-                    Send-AzActionGroupEmail -ActionGroupId $actionGroupId `
-                        -Subject $emailSubject `
-                        -Body $emailBody `
-                        -Recipients $emailRecipients
-                }
+            # Notify the matching action groups about secrets expiring within 20 days
+            foreach ($actionGroup in $matchingActionGroups) {
+                Send-AzActionGroupEmail -ActionGroupId $actionGroup.ActionGroupId -Subject "Secret Expiry Warning for '$secretName'" -Body "The secret '$secretName' in Key Vault '$keyVaultName' is about to expire within 20 days."
             }
         }
     }
 }
+
